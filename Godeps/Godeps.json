@@ -1,5 +1,5 @@
 {
-	"ImportPath": "github.com/ls0f/cracker-heroku",
+	"ImportPath": "github.com/koolwiki/cracker-heroku",
 	"GoVersion": "go1.7",
 	"GodepVersion": "v79",
 	"Deps": [
@@ -8,9 +8,9 @@
 			"Rev": "23def4e6c14b4da8ac2ed8007337bc5eb5007998"
 		},
 		{
-			"ImportPath": "github.com/ls0f/cracker",
-			"Comment": "v2.2.3-8-g9143477",
-			"Rev": "9143477ca4ca5f6ce633c2c4c0a368158264d114"
+			"ImportPath": "github.com/koolwiki/cracker",
+			"Comment": "v2.3.4-50fc879",
+			"Rev": "50fc87968a9466a7098abc8dc805fa347a8d4dcd"
 		},
 		{
 			"ImportPath": "github.com/pborman/uuid",
