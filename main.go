@@ -18,7 +18,7 @@ func main() {
 	if secret == "" {
 		secret = "123456"
 	}
-  if rpAddr == "" {
+        if rpAddr == "" {
 		rpAddr = "http://mirrors.xmission.com/ubuntu/"
 	}
 	addr := fmt.Sprintf(":%s", port)
