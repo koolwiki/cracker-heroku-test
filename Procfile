@@ -1,1 +1,1 @@
-web: cracker-heroku
+web: cracker-heroku-test
