@@ -9,7 +9,8 @@ import (
 
 func main() {
 
-	var port, secret string, rpAddr string,
+	var port, secret string
+	var rpAddr string
 	port = os.Getenv("PORT")
 	secret = os.Getenv("SECRET")
 	rpAddr = os.Getenv("RPADDR")
