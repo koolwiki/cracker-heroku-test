@@ -1,5 +1,5 @@
 {
-	"ImportPath": "github.com/koolwiki/cracker-heroku",
+	"ImportPath": "github.com/koolwiki/cracker-heroku-test",
 	"GoVersion": "go1.7",
 	"GodepVersion": "v79",
 	"Deps": [
