@@ -1,15 +1,17 @@
 package cracker
 
 import (
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"time"
 
 	"fmt"
-	"net"
 
 	"errors"
-
+	"strings"
 	"sync"
 
 	g "github.com/golang/glog"
@@ -50,23 +52,69 @@ const (
 	version = "20170803"
 )
 
+var bufPool = &sync.Pool{New: func() interface{} { return make([]byte, 1024*8) }}
+
 type httpProxy struct {
 	addr     string
 	secret   string
 	proxyMap map[string]*proxyConn
 	sync.Mutex
 	https bool
+	rp    http.Handler
 }
 
-func NewHttpProxy(addr, secret string, https bool) *httpProxy {
-	return &httpProxy{addr: addr,
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	}
+	return a + b
+}
+
+func myNewSingleHostReverseProxy(target *url.URL) *httputil.ReverseProxy {
+	targetQuery := target.RawQuery
+	director := func(req *http.Request) {
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.Host = target.Host
+		req.Header.Set("Host", target.Host)
+		req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
+		if targetQuery == "" || req.URL.RawQuery == "" {
+			req.URL.RawQuery = targetQuery + req.URL.RawQuery
+		} else {
+			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
+		}
+		if _, ok := req.Header["User-Agent"]; !ok {
+			// explicitly disable User-Agent so it's not set to default value
+			req.Header.Set("User-Agent", "")
+		}
+	}
+	return &httputil.ReverseProxy{Director: director}
+}
+
+func NewHttpProxy(addr, secret string, https bool, rpAddr string) *httpProxy {
+	server := &httpProxy{addr: addr,
 		secret:   secret,
 		proxyMap: make(map[string]*proxyConn),
 		https:    https,
 	}
+	if strings.HasPrefix(rpAddr, "http") {
+		u, err := url.Parse(rpAddr)
+		if err != nil {
+			g.Fatal(err)
+			return nil
+		}
+		server.rp = myNewSingleHostReverseProxy(u)
+	}
+	return server
 }
 
 func (hp *httpProxy) handler() {
+	http.HandleFunc("/", hp.reverseProxy)
 	http.HandleFunc(CONNECT, hp.connect)
 	http.HandleFunc(PULL, hp.pull)
 	http.HandleFunc(PUSH, hp.push)
@@ -83,6 +131,14 @@ func (hp *httpProxy) Listen() {
 	hp.handler()
 	g.Infof("listen at:[%s]", hp.addr)
 	g.Fatal("ListenAndServe: ", http.ListenAndServe(hp.addr, nil))
+}
+
+func (hp *httpProxy) reverseProxy(w http.ResponseWriter, r *http.Request) {
+	if hp.rp == nil {
+		WriteNotFoundError(w, "404")
+	} else {
+		hp.rp.ServeHTTP(w, r)
+	}
 }
 
 func (hp *httpProxy) verify(r *http.Request) error {
@@ -138,17 +194,22 @@ func (hp *httpProxy) pull(w http.ResponseWriter, r *http.Request) {
 	if interval == "" {
 		interval = "0"
 	}
+	buf := bufPool.Get().([]byte)
+	defer bufPool.Put(buf)
 	t, _ := strconv.ParseInt(interval, 10, 0)
 	if t > 0 {
 		pc.remote.SetReadDeadline(time.Now().Add(time.Duration(t)))
-		_, err := io.Copy(w, pc.remote)
+		n, err := pc.remote.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+		}
 		if err != nil {
 			if err, ok := err.(net.Error); ok && err.Timeout() {
 			} else {
-				pc.Close()
-				if err != io.EOF {
-					g.V(LDEBUG).Infof("read :%v", err)
+				if err != io.EOF && !pc.IsClosed() {
+					g.V(LERROR).Infof("read :%v", err)
 				}
+				pc.Close()
 			}
 		}
 
@@ -156,7 +217,6 @@ func (hp *httpProxy) pull(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher, _ := w.(http.Flusher)
 	w.Header().Set("Transfer-Encoding", "chunked")
-	buf := make([]byte, 10240)
 	defer pc.Close()
 	for {
 		flusher.Flush()
@@ -165,8 +225,8 @@ func (hp *httpProxy) pull(w http.ResponseWriter, r *http.Request) {
 			w.Write(buf[:n])
 		}
 		if err != nil {
-			if err != io.EOF {
-				g.V(LDEBUG).Infof("read :%v", err)
+			if err != io.EOF && !pc.IsClosed() {
+				g.V(LERROR).Info(err)
 			}
 			return
 		}
@@ -200,7 +260,9 @@ func (hp *httpProxy) push(w http.ResponseWriter, r *http.Request) {
 	case DATA_TYP:
 		_, err := io.Copy(pc.remote, r.Body)
 		if err != nil && err != io.EOF {
-			g.V(LDEBUG).Infof("write :%v", err)
+			if !pc.IsClosed() {
+				g.V(LERROR).Info(err)
+			}
 			pc.Close()
 		}
 	}
@@ -230,12 +292,10 @@ func (hp *httpProxy) connect(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		pc.Do()
-		g.V(LDEBUG).Infof("disconnect %s", remote.RemoteAddr().String())
-		<-time.After(time.Second * heartTTL)
 		hp.Lock()
-		g.V(LDEBUG).Infof("delete uuid:%s ... \n", proxyID)
 		delete(hp.proxyMap, proxyID)
 		hp.Unlock()
+		g.V(LINFO).Infof("disconnect %s", addr)
 	}()
 	WriteHTTPOK(w, proxyID)
 }
